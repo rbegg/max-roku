@@ -1,8 +1,7 @@
 import argparse
 
-
+from max_roku.command_handler import CommandHandler
 from max_roku.discover import discover_roku_ip
-from max_roku.catalog import Catalog, NETFLIX_APP_ID, NETFLIX_CATALOG
 from max_roku.roku_controller import RokuController
 
 
@@ -23,39 +22,18 @@ def main():
             print("Error: No Roku device could be identified. Please check your network or provide the IP manually.")
             return
 
-    catalog = Catalog(NETFLIX_CATALOG)
-
     print(f"Targeting Roku at: {roku_ip}")
     roku = RokuController(roku_ip)
 
+    handler = CommandHandler(roku)
+
     print("\n--- Interactive Roku Remote Active ---")
-    print("Available commands: up, down, home, back, select, left, right, playpause, exit")
+    print(f"Available commands: {handler.get_available_commands()}")
 
     while True:
-        # Get user input and clean it up
-        cmd = input("\nEnter command: ").strip().lower()
-
-        if cmd == 'exit':
-            print("Exiting Remote Control.")
+        user_input = input("\nEnter command: ").strip().lower()
+        if not handler.process(user_input):
             break
-        elif cmd == 'up':
-            roku.launch_app(NETFLIX_APP_ID, *catalog.next())
-        elif cmd == 'down':
-            roku.launch_app(NETFLIX_APP_ID, *catalog.prev())
-        elif cmd == 'home':
-            roku.press_home()
-        elif cmd == 'back':
-            roku.press_back()
-        elif cmd == 'play':
-            roku.launch_app(NETFLIX_APP_ID, *catalog.current())
-        elif cmd == '?':
-            print(f"State: {roku.get_media_player_state()}")
-        elif cmd == 'select':
-            roku.press_select()
-            continue
-        else:
-            print(f"Unknown command: '{cmd}'. Please try again.")
-
 
 # --- Usage Example ---
 if __name__ == "__main__":

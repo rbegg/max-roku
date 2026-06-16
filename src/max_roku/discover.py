@@ -1,4 +1,5 @@
 import socket
+import re
 
 def discover_roku_ip():
     """

@@ -6,6 +6,8 @@ name = "pypi"
 [packages]
 requests = "*"
 xmltodict = "*"
+fastapi = "*"
+uvicorn = "*"
 
 [dev-packages]
 

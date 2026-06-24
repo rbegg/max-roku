@@ -1,6 +1,7 @@
-import requests
+import httpx
 from time import sleep
 import xmltodict
+import asyncio
 
 PAUSE_TIME = 5
 MAX_RETRIES = 12
@@ -25,80 +26,34 @@ class RokuController:
         Pause: Explicitly pauses the media (if the app supports it).**not implemented**
     """
     CMD_LIST = ['Home', 'Back', 'Select', 'Up', 'Down', 'Left', 'Right', 'Play', 'Rev', 'Fwd', 'InstantReplay']
-    def __init__(self, ip_address):
+    def __init__(self, ip_address, client: httpx.AsyncClient):
         """
         Initialize the controller with the Roku device's IP address.
         """
         # noinspection HttpUrlsUsage
         self.base_url = f"http://{ip_address}:8060"
+        self.client = client
         self.media_player_state = {}
         self.state = "stop"
         self.position = None # in milliseconds if known
-        ##self.state
 
-    def _send_command(self, command):
+    async def send_command(self, command):
         """
         Internal method to send the POST request to the ECP endpoint.
         """
         url = f"{self.base_url}/keypress/{command}"
         try:
-            response = requests.post(url)
+            response = await self.client.post(url)
             if response.status_code == 200:
                 print(f"Successfully sent command: {command}")
             else:
                 print(f"Failed to send command. Status code: {response.status_code}")
-        except requests.exceptions.ConnectionError:
-            print(f"Error: Could not connect to Roku at {self.base_url}. Is the IP correct?")
+        #except requests.exceptions.ConnectionError:
+            #print(f"Error: Could not connect to Roku at {self.base_url}. Is the IP correct?")
         except Exception as e:
             print(f"An error occurred: {e}")
 
-    def press_home(self):
-        """Home: Returns to the Roku home screen."""
-        self._send_command("Home")
-
-    def press_back(self):
-        """Back: Returns to the previous screen."""
-        self._send_command("Back")
-
-    def press_select(self):
-        """Select: Selects the currently highlighted item (equivalent to "OK")."""
-        self._send_command("Select")
-
-    def press_left(self):
-        """Left: Directional pad navigation."""
-        self._send_command("Left")
-
-    def press_right(self):
-        """Right: Directional pad navigation."""
-        self._send_command("Right")
-
-    def press_up(self):
-        """Up: Directional pad navigation."""
-        self._send_command("Up")
-
-    def press_down(self):
-        """Down: Directional pad navigation."""
-        self._send_command("Down")
-
-    def press_play_pause(self):
-        """Play: Toggles between play and pause."""
-        self._send_command("Play")
-
-    def press_rev(self):
-        """Rev: Rewinds the media"""
-        self._send_command("Rev")
-
-    def press_fwd(self):
-        """Fwd: Fast-forwards the media"""
-        self._send_command("Fwd")
-
-    def press_instant_replay(self):
-        self._send_command("InstantReplay")
-
-    def press_pause(self):
-        self._send_command("Pause")
-
-    def launch_app(self, app_id, content_id=None, content_type=None) -> bool:
+    async def launch_app(self, app_id, content_id=None, content_type=None) -> bool:
         """
         Launches a specific application on the Roku.
         Supports deep linking via content_id and content_type.
@@ -114,12 +69,12 @@ class RokuController:
 
         try:
             # Using 'params' automatically appends ?contentId=...&contentType=... to the URL
-            response = requests.post(url, params=params)
+            response = await self.client.post(url, params=params)
             print(f"POST: {response.url}")
             if response.status_code == 200:
                 print(f"Successfully sent launch command for: {app_id} (Deep link: {bool(content_id)})")
-                sleep(PAUSE_TIME*2)
-                self.get_media_player_state()
+                await asyncio.sleep(PAUSE_TIME*2)
+                await self.get_media_player_state()
                 print(f"1-State: {self.state}")
                 retry = 0
                 if not content_id:
@@ -128,10 +83,10 @@ class RokuController:
                 # Multiple Selects to accept profile and another to start playing may be required
                 while self.state != "play" and retry < MAX_RETRIES:
                     retry +=1
-                    sleep(PAUSE_TIME)
-                    self.press_select()
-                    sleep(PAUSE_TIME)
-                    self.get_media_player_state()
+                    await asyncio.sleep(PAUSE_TIME)
+                    await self.send_command('Select')
+                    await asyncio.sleep(PAUSE_TIME)
+                    await self.get_media_player_state()
                     print(f"2-State: {self.state}")
 
                 if self.state == "play":
@@ -147,7 +102,7 @@ class RokuController:
 
         return False
 
-    def restart_current(self, pause: bool):
+    async def restart_current(self, pause: bool):
         """
         Resets the current playing media to the start, and either pauses or plays.
         The media player state must = 'pause' or 'play'.
@@ -156,8 +111,8 @@ class RokuController:
         :return: True if successful, False if the meda player is in an unexpected state.
         """
         # Ensure player has responded to any previous request
-        sleep(PAUSE_TIME)
-        self.get_media_player_state()
+        await asyncio.sleep(PAUSE_TIME)
+        await self.get_media_player_state()
         print(f"Restart: Initial State ={self.state}")
         if self.state in ['play', 'pause']:
             if not self.position:
@@ -166,28 +121,28 @@ class RokuController:
             # if less than 30 seconds of media has played, back will not yield a 'restart from beginning' option
             if self.position < 35000:
                 print(f"Need to fast fwd ")
-                self.press_fwd()
-                sleep(PAUSE_TIME)
-                self.press_play_pause()
-                sleep(PAUSE_TIME)
+                await self.send_command('Fwd')
+                await asyncio.sleep(PAUSE_TIME)
+                await self.send_command('Play')
+                await asyncio.sleep(PAUSE_TIME)
 
-            self.press_back()
-            sleep(PAUSE_TIME)
-            self.press_down()
-            sleep(1)
-            self.press_select()
-            sleep(1)
+            await self.send_command('Back')
+            await asyncio.sleep(PAUSE_TIME)
+            await self.send_command('Down')
+            await asyncio.sleep(1)
+            await self.send_command('Select')
+            await asyncio.sleep(1)
             if pause:
                 print("Pausing")
                 sleep(PAUSE_TIME)
-                self.press_play_pause()
+                await self.send_command('Play')
                 sleep(PAUSE_TIME)
-            self.get_media_player_state()
+            await self.get_media_player_state()
             print(f"Restart: Final State = {self.state}")
             return True
         return False
 
-    def get_active_app(self):
+    async def get_active_app(self):
         """
         Queries the Roku device to find out which app is currently running.
         Returns the raw XML response text.
@@ -195,7 +150,7 @@ class RokuController:
         url = f"{self.base_url}/query/active-app"
         try:
             # Note: Query endpoints require GET requests, unlike keypresses which use POST
-            response = requests.get(url)
+            response = await self.client.get(url)
             if response.status_code == 200:
                 print("Successfully retrieved active app.")
                 return response.text
@@ -206,14 +161,14 @@ class RokuController:
             print(f"An error occurred while querying active app: {e}")
             return None
 
-    def get_media_player_state(self) -> dict | None:
+    async def get_media_player_state(self) -> dict | None:
         """
         Queries the Roku device for the current playback state of the media player.
         Returns the raw XML response text.
         """
         url = f"{self.base_url}/query/media-player"
         try:
-            response = requests.get(url)
+            response = await self.client.get(url)
             if response.status_code == 200:
                 print("Successfully retrieved media player state.")
                 self.media_player_state = xmltodict.parse(response.text)

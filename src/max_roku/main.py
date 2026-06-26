@@ -1,19 +1,41 @@
-from fastapi import FastAPI, HTTPException, Depends
+import asyncio
+from http import HTTPStatus
+from contextlib import asynccontextmanager
+from os import getenv
+
+from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 import httpx
 import uvicorn
 
-from max_roku.roku_controller import RokuController
+from max_roku.roku_controller import RokuController, Command
+from max_roku.discover import discover_roku_ip
+from max_roku.provider import get_provider
 
-app = FastAPI(title="Roku Control API")
 
-# Global variable to hold our controller and client
-# In a production app, you might use a more robust dependency injection pattern
-state = {
-    "controller": None,
-    "client": None
-}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- Startup ---
+
+    roku_ip = getenv("ROKU_IP") or await asyncio.to_thread(discover_roku_ip)
+    if not roku_ip:
+        raise RuntimeError("Could not determine Roku IP (set ROKU_IP or ensure device is discoverable)")
+
+    client = httpx.AsyncClient()
+    app.state.client = client
+    app.state.controller = RokuController(roku_ip, client)
+    print(f"Service started. Targeting Roku at {roku_ip}")
+
+    yield
+
+    # --- Shutdown ---
+    if client is not None:
+        await client.aclose()
+
+
+roku_app = FastAPI(title="Roku Control API", lifespan=lifespan)
 
 
 class LaunchRequest(BaseModel):
@@ -26,29 +48,16 @@ class RestartRequest(BaseModel):
     pause: bool = False
 
 
-@app.on_event("startup")
-async def startup_event():
-    # In a real scenario, you'd pass the IP via environment variable or config
-    roku_ip = "192.168.2.64"
-    state["client"] = httpx.AsyncClient()
-    state["controller"] = RokuController(roku_ip, state["client"])
-    print(f"Service started. Targeting Roku at {roku_ip}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await state["client"].aclose()
-
-
-def get_controller() -> RokuController:
-    if state["controller"] is None:
-        raise HTTPException(status_code=500, detail="Controller not initialized")
-    return state["controller"]
+def get_controller(request: Request) -> RokuController:
+    controller: Optional[RokuController] = getattr(request.app.state, "controller", None)
+    if controller is None:
+        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Controller not initialized")
+    return controller
 
 
 # --- Status Endpoints ---
 
-@app.get("/status")
+@roku_app.get("/status")
 async def get_status(controller: RokuController = Depends(get_controller)):
     """Returns the current media player state."""
     state_data = await controller.get_media_player_state()
@@ -59,9 +68,9 @@ async def get_status(controller: RokuController = Depends(get_controller)):
 
 # --- Navigation Endpoints ---
 
-@app.post("/press/{command}")
+@roku_app.post("/press/{command}")
 async def press_command(command: str, controller: RokuController = Depends(get_controller)):
-    """Generic endpoint for simple button presses
+    """Generic endpoint for a simple button presses
     Navigation & Menus
         Home: Returns to the Roku home screen.
         Back: Returns to the previous screen.
@@ -73,27 +82,31 @@ async def press_command(command: str, controller: RokuController = Depends(get_c
         Fwd: Fast-forwards the media.
         InstantReplay: Skips back a few seconds (the circular arrow button).
     """
-    cmd = command.capitalize()
 
-    if cmd not in controller.CMD_LIST:
+    try:
+        cmd = Command(command.capitalize())
+        await controller.send_command(cmd)
+
+    except ValueError:
         raise HTTPException(status_code=400, detail=f"Command '{command}' not supported")
 
-    await controller.send_command(cmd)
-    return {"message": f"Command {command} sent successfully"}
+
+    return {"message": f"Command {cmd} sent successfully"}
 
 
 # --- Action Endpoints ---
 
-@app.post("/launch")
+@roku_app.post("/launch")
 async def launch_app(req: LaunchRequest, controller: RokuController = Depends(get_controller)):
-    """Launches a specific app."""
-    success = await controller.launch_app(req.app_id, req.content_id, req.content_type)
+    """Launches a specific app using the provider appropriate for its app_id."""
+    provider = get_provider(req.app_id, controller)
+    success = await provider.launch(req.content_id, req.content_type)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to launch app")
     return {"message": f"App {req.app_id} launched successfully"}
 
 
-@app.post("/restart")
+@roku_app.post("/restart")
 async def restart_player(req: RestartRequest, controller: RokuController = Depends(get_controller)):
     """Restarts the current media."""
     success = await controller.restart_current(req.pause)
@@ -103,4 +116,4 @@ async def restart_player(req: RestartRequest, controller: RokuController = Depen
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(roku_app, host="0.0.0.0", port=8000)

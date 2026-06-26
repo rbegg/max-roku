@@ -1,10 +1,29 @@
+from http import HTTPStatus
+from typing import Literal
+from enum import StrEnum
+
 import httpx
-from time import sleep
 import xmltodict
 import asyncio
 
+from max_roku.provider import get_provider
+
 PAUSE_TIME = 5
 MAX_RETRIES = 12
+
+type PlayerState = Literal["stop", "play", "pause"]
+
+class Command(StrEnum):
+    HOME = "Home"
+    BACK = "Back"
+    SELECT = "Select"
+    UP = "Up"
+    DOWN = "Down"
+    LEFT = "Left"
+    RIGHT = "Right"
+    PLAY = "Play"
+    REV = "Rev"
+    FWD = "Fwd"
 
 class RokuController:
     """
@@ -34,17 +53,18 @@ class RokuController:
         self.base_url = f"http://{ip_address}:8060"
         self.client = client
         self.media_player_state = {}
-        self.state = "stop"
+        self.state : PlayerState = "stop"
         self.position = None # in milliseconds if known
+        self.plugin_app = None
 
-    async def send_command(self, command):
+    async def send_command(self, command: Command):
         """
         Internal method to send the POST request to the ECP endpoint.
         """
         url = f"{self.base_url}/keypress/{command}"
         try:
             response = await self.client.post(url)
-            if response.status_code == 200:
+            if response.status_code == HTTPStatus.OK:
                 print(f"Successfully sent command: {command}")
             else:
                 print(f"Failed to send command. Status code: {response.status_code}")
@@ -55,12 +75,11 @@ class RokuController:
 
     async def launch_app(self, app_id, content_id=None, content_type=None) -> bool:
         """
-        Launches a specific application on the Roku.
-        Supports deep linking via content_id and content_type.
+        Launches a specific application on the Roku via deep-link.
+        Returns True if the launch HTTP call succeeded (does NOT guarantee playback).
         """
         url = f"{self.base_url}/launch/{app_id}"
 
-        # Prepare query parameters for deep linking
         params = {}
         if content_id:
             params['contentID'] = content_id
@@ -68,41 +87,20 @@ class RokuController:
             params['mediaType'] = content_type
 
         try:
-            # Using 'params' automatically appends ?contentId=...&contentType=... to the URL
             response = await self.client.post(url, params=params)
             print(f"POST: {response.url}")
-            if response.status_code == 200:
-                print(f"Successfully sent launch command for: {app_id} (Deep link: {bool(content_id)})")
-                await asyncio.sleep(PAUSE_TIME*2)
+            if response.status_code == HTTPStatus.OK:
+                print(f"Successfully launched: {app_id} (Deep link: {bool(content_id)})")
+                await asyncio.sleep(PAUSE_TIME * 2)
                 await self.get_media_player_state()
-                print(f"1-State: {self.state}")
-                retry = 0
-                if not content_id:
-                    return False
-
-                # Multiple Selects to accept profile and another to start playing may be required
-                while self.state != "play" and retry < MAX_RETRIES:
-                    retry +=1
-                    await asyncio.sleep(PAUSE_TIME)
-                    await self.send_command('Select')
-                    await asyncio.sleep(PAUSE_TIME)
-                    await self.get_media_player_state()
-                    print(f"2-State: {self.state}")
-
-                if self.state == "play":
-                    return True
-                else:
-                    print(f"Not in play state!!  State = {self.state}")
-                    return False
-            else:
-                print(f"Unexpected Response Code = {response.status_code}")
-                return False
+                return True
+            print(f"Unexpected Response Code = {response.status_code}")
+            return False
         except Exception as e:
             print(f"An error occurred while launching {app_id}: {e}")
+            return False
 
-        return False
-
-    async def restart_current(self, pause: bool):
+    async def restart_current(self, pause: bool) -> bool:
         """
         Resets the current playing media to the start, and either pauses or plays.
         The media player state must = 'pause' or 'play'.
@@ -113,34 +111,29 @@ class RokuController:
         # Ensure player has responded to any previous request
         await asyncio.sleep(PAUSE_TIME)
         await self.get_media_player_state()
-        print(f"Restart: Initial State ={self.state}")
-        if self.state in ['play', 'pause']:
-            if not self.position:
-                print(f"Expected position value")
-                return False
-            # if less than 30 seconds of media has played, back will not yield a 'restart from beginning' option
-            if self.position < 35000:
-                print(f"Need to fast fwd ")
-                await self.send_command('Fwd')
-                await asyncio.sleep(PAUSE_TIME)
-                await self.send_command('Play')
-                await asyncio.sleep(PAUSE_TIME)
+        print(f"Restart: Initial State ={self.state} Plugin_app={self.plugin_app['@id']}")
 
-            await self.send_command('Back')
-            await asyncio.sleep(PAUSE_TIME)
-            await self.send_command('Down')
-            await asyncio.sleep(1)
-            await self.send_command('Select')
-            await asyncio.sleep(1)
-            if pause:
-                print("Pausing")
-                sleep(PAUSE_TIME)
-                await self.send_command('Play')
-                sleep(PAUSE_TIME)
-            await self.get_media_player_state()
-            print(f"Restart: Final State = {self.state}")
-            return True
+        if self.state in ['play', 'pause'] and self.plugin_app:
+            provider = get_provider(self.plugin_app["@id"], self)
+            return await provider.restart(pause)
+
         return False
+
+    async def press_until_playing(self, max_retries: int = MAX_RETRIES) -> bool:
+        """
+        Repeatedly presses 'Select' until the media player reports 'play'.
+        Useful for apps that require confirming a profile or pressing play.
+        """
+        retry = 0
+        while self.state != "play" and retry < max_retries:
+            retry += 1
+            await asyncio.sleep(PAUSE_TIME)
+            await self.send_command('Select')
+            await asyncio.sleep(PAUSE_TIME)
+            await self.get_media_player_state()
+            print(f"press_until_playing: state={self.state}")
+        return self.state == "play"
+
 
     async def get_active_app(self):
         """
@@ -151,7 +144,7 @@ class RokuController:
         try:
             # Note: Query endpoints require GET requests, unlike keypresses which use POST
             response = await self.client.get(url)
-            if response.status_code == 200:
+            if response.status_code == HTTPStatus.OK:
                 print("Successfully retrieved active app.")
                 return response.text
             else:
@@ -169,12 +162,13 @@ class RokuController:
         url = f"{self.base_url}/query/media-player"
         try:
             response = await self.client.get(url)
-            if response.status_code == 200:
+            if response.status_code == HTTPStatus.OK:
                 print("Successfully retrieved media player state.")
                 self.media_player_state = xmltodict.parse(response.text)
                 position = self.media_player_state["player"].get("position", None)
                 if position:
                     self.position = int(position.split()[0])
+                self.plugin_app = self.media_player_state["player"].get("plugin", None)
                 state = self.media_player_state["player"].get("@state", "")
                 if state in ("stop", "close", "none"):
                     self.state = "stop"

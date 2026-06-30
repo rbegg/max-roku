@@ -9,6 +9,10 @@ xmltodict = "*"
 fastapi = "*"
 uvicorn = "*"
 httpx = "*"
+pytest = "*"
+coverage = "*"
+pytest-cov = "*"
+pytest-asyncio = "*"
 
 [dev-packages]
 

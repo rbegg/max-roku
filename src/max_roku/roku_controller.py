@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Literal
+from typing import Literal, Any, Optional, Tuple, Dict
 from enum import StrEnum
 
 import httpx
@@ -11,7 +11,7 @@ from max_roku.provider import get_provider
 PAUSE_TIME = 5
 MAX_RETRIES = 12
 
-type PlayerState = Literal["stop", "play", "pause"]
+type PlayerState = Literal["stop", "play", "pause", "unknown"]
 
 class Command(StrEnum):
     HOME = "Home"
@@ -53,9 +53,12 @@ class RokuController:
         self.base_url = f"http://{ip_address}:8060"
         self.client = client
         self.media_player_state = {}
-        self.state : PlayerState = "stop"
+        self._state : PlayerState = "stop"
         self.position = None # in milliseconds if known
         self.plugin_app = None
+
+    def get_state(self) -> PlayerState:
+        return self._state
 
     async def send_command(self, command: Command):
         """
@@ -111,9 +114,9 @@ class RokuController:
         # Ensure player has responded to any previous request
         await asyncio.sleep(PAUSE_TIME)
         await self.get_media_player_state()
-        print(f"Restart: Initial State ={self.state} Plugin_app={self.plugin_app['@id']}")
+        print(f"Restart: Initial State ={self._state} Plugin_app={self.plugin_app['@id']}")
 
-        if self.state in ['play', 'pause'] and self.plugin_app:
+        if self._state in ['play', 'pause'] and self.plugin_app:
             provider = get_provider(self.plugin_app["@id"], self)
             return await provider.restart(pause)
 
@@ -125,14 +128,15 @@ class RokuController:
         Useful for apps that require confirming a profile or pressing play.
         """
         retry = 0
-        while self.state != "play" and retry < max_retries:
+        state, _ = await self.get_media_player_state()
+        while state != "play" and retry < max_retries:
             retry += 1
             await asyncio.sleep(PAUSE_TIME)
-            await self.send_command('Select')
+            await self.send_command(Command.SELECT)
             await asyncio.sleep(PAUSE_TIME)
-            await self.get_media_player_state()
-            print(f"press_until_playing: state={self.state}")
-        return self.state == "play"
+            state, _ = await self.get_media_player_state()
+            print(f"press_until_playing: state={state}")
+        return state == "play"
 
 
     async def get_active_app(self):
@@ -154,10 +158,10 @@ class RokuController:
             print(f"An error occurred while querying active app: {e}")
             return None
 
-    async def get_media_player_state(self) -> dict | None:
+    async def get_media_player_state(self) -> Tuple[Optional[PlayerState], Optional[Dict[str, Any]]]:
         """
         Queries the Roku device for the current playback state of the media player.
-        Returns the raw XML response text.
+        Returns response a dictionary containing the XML response.
         """
         url = f"{self.base_url}/query/media-player"
         try:
@@ -171,18 +175,19 @@ class RokuController:
                 self.plugin_app = self.media_player_state["player"].get("plugin", None)
                 state = self.media_player_state["player"].get("@state", "")
                 if state in ("stop", "close", "none"):
-                    self.state = "stop"
+                    self._state = "stop"
                 elif state in ("play", "buffer", "buffering"):
-                    self.state = "play"
+                    self._state = "play"
                 elif state == "pause":
-                    self.state = "pause"
+                    self._state = "pause"
                 else:
+                    self._state = "unknown"
                     print(f"Unknown State: {state}")
 
-                return self.media_player_state
+                return self._state, self.media_player_state
             else:
                 print(f"Failed to get media player state. Status code: {response.status_code}")
-                return None
+                return None, None
         except Exception as e:
             print(f"An error occurred while querying media player state: {e}")
-            return None
+            return None, None

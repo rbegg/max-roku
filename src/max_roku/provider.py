@@ -36,7 +36,7 @@ class GenericProvider(Provider):
     """
 
     def __init__(self, controller, app_id: str| None = None):
-        super().__init__(controller, app_id)
+        super().__init__(controller, app_id=app_id)
 
     async def launch(self, content_id=None, content_type=None) -> bool:
         launched = await self.controller.launch_app(
@@ -44,7 +44,8 @@ class GenericProvider(Provider):
         )
         if not launched or not content_id:
             return launched
-        return await self.controller.press_until_playing()
+        result = await self.controller.press_until_playing()
+        return result
 
     async def restart(self, pause: bool = False) -> bool:
         """
@@ -53,16 +54,16 @@ class GenericProvider(Provider):
         return False
 
     async def pause(self) -> str:
-        await self.controller.get_media_player_state()
-        print(f"Pause: Initial State = {self.controller.state}")
-        if self.controller.state == "play":
+        state, _ = await self.controller.get_media_player_state()
+        print(f"Pause: Initial State = {state}")
+        if state == "play":
             print("Pausing")
             sleep(PAUSE_TIME)
             await self.controller.send_command('Play')
             sleep(PAUSE_TIME)
-            await self.controller.get_media_player_state()
-        print(f"Pause: Final State = {self.controller.state}")
-        return self.controller.state
+            state, _ = await self.controller.get_media_player_state()
+        print(f"Pause: Final State = {state}")
+        return state
 
 
 
@@ -98,9 +99,9 @@ class NetflixProvider(GenericProvider):
         """
         # Ensure player has responded to any previous request
         # await asyncio.sleep(PAUSE_TIME)
-        await self.controller.get_media_player_state()
-        print(f"Restart: Pause={pause} Initial State ={self.controller.state}")
-        if self.controller.state in ['play', 'pause']:
+        state, _  = await self.controller.get_media_player_state()
+        print(f"Restart: Pause={pause} Initial State ={state}")
+        if state in ['play', 'pause']:
             if not self.controller.position:
                 print(f"Expected position value")
                 return False
@@ -121,8 +122,7 @@ class NetflixProvider(GenericProvider):
             if pause:
                 state = await self.pause()
             else:
-                await self.controller.get_media_player_state()
-                state = self.controller.state
+                state, _ = await self.controller.get_media_player_state()
 
             print(f"Restart: Final State = {state}")
             return True
@@ -139,8 +139,8 @@ class ZinniaProvider(GenericProvider):
     app_id: str = "674313"
 
     async def restart(self, pause: bool = False) -> bool:
-        await self.controller.get_media_player_state()
-        print(f"Restart: Initial State ={self.controller.state}")
+        state, _ = await self.controller.get_media_player_state()
+        print(f"Restart: Initial State ={state}")
         if not self.controller.position:
             print(f"Expected position value")
             return False
@@ -159,7 +159,7 @@ class ZinniaProvider(GenericProvider):
         if pause:
             state = await self.pause()
         else:
-            state = await self.controller.get_media_player_state()
+            state, _ = await self.controller.get_media_player_state()
         print(f"Restart: Final State = {state}")
 
         return True

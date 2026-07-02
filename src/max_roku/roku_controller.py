@@ -60,21 +60,23 @@ class RokuController:
     def get_state(self) -> PlayerState:
         return self._state
 
-    async def send_command(self, command: Command):
+    async def send_command(self, command: Command) -> bool:
         """
         Internal method to send the POST request to the ECP endpoint.
         """
         url = f"{self.base_url}/keypress/{command}"
         try:
             response = await self.client.post(url)
-            if response.status_code == HTTPStatus.OK:
-                print(f"Successfully sent command: {command}")
-            else:
+            if response.status_code != HTTPStatus.OK:
                 print(f"Failed to send command. Status code: {response.status_code}")
-        #except requests.exceptions.ConnectionError:
-            #print(f"Error: Could not connect to Roku at {self.base_url}. Is the IP correct?")
+                return False
         except Exception as e:
             print(f"An error occurred: {e}")
+            return False
+
+        print(f"Successfully sent command: {command}")
+        return True
+
 
     async def launch_app(self, app_id, content_id=None, content_type=None) -> bool:
         """
@@ -113,10 +115,10 @@ class RokuController:
         """
         # Ensure player has responded to any previous request
         await asyncio.sleep(PAUSE_TIME)
-        await self.get_media_player_state()
-        print(f"Restart: Initial State ={self._state} Plugin_app={self.plugin_app['@id']}")
+        state, _ = await self.get_media_player_state()
+        print(f"Restart: Initial State ={state} Plugin_app={self.plugin_app['@id']}")
 
-        if self._state in ['play', 'pause'] and self.plugin_app:
+        if state in ['play', 'pause'] and self.plugin_app:
             provider = get_provider(self.plugin_app["@id"], self)
             return await provider.restart(pause)
 
@@ -146,7 +148,6 @@ class RokuController:
         """
         url = f"{self.base_url}/query/active-app"
         try:
-            # Note: Query endpoints require GET requests, unlike keypresses which use POST
             response = await self.client.get(url)
             if response.status_code == HTTPStatus.OK:
                 print("Successfully retrieved active app.")

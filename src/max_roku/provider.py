@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from time import sleep
 import asyncio
 
 PAUSE_TIME = 5
@@ -58,9 +57,9 @@ class GenericProvider(Provider):
         print(f"Pause: Initial State = {state}")
         if state == "play":
             print("Pausing")
-            sleep(PAUSE_TIME)
+            await asyncio.sleep(PAUSE_TIME)
             await self.controller.send_command('Play')
-            sleep(PAUSE_TIME)
+            await asyncio.sleep(PAUSE_TIME)
             state, _ = await self.controller.get_media_player_state()
         print(f"Pause: Final State = {state}")
         return state

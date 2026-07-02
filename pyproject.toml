@@ -1,0 +1,28 @@
+[project]
+name = "max-roku"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "fastapi>=0.139.0",
+    "httpx>=0.28.1",
+    "uvicorn>=0.49.0",
+    "xmltodict>=1.0.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "coverage",
+    "pytest-cov",
+    "pytest-asyncio",
+]
+
+[tool.uv]
+package = false
+default-groups = "all"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"

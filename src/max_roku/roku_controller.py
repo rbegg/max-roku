@@ -109,9 +109,6 @@ class RokuController:
         """
         Resets the current playing media to the start, and either pauses or plays.
         The media player state must = 'pause' or 'play'.
-        :param pause: If True, the media will be reset to the start and then paused.
-                      If False, the media will replay from the start.
-        :return: True if successful, False if the meda player is in an unexpected state.
         """
         # Ensure player has responded to any previous request
         await asyncio.sleep(PAUSE_TIME)
@@ -144,14 +141,27 @@ class RokuController:
     async def get_active_app(self):
         """
         Queries the Roku device to find out which app is currently running.
-        Returns the raw XML response text.
+        Returns a dict that maps the raw XML response text.
+        If an app is active:
+            <active-app>
+                <app id="<id>" type="appl" version="<version>"<name></app>
+            </active-app>
+        mapped to:
+            {"active_app": {"@id":<id>, "@type": "appl", "@version": "<version>", "#text":"<name>"}}
+        If no app is active:
+        <active-app>
+            <app>Roku</app>
+        </active-app>
+                mapped to:
+            {"active_app": {"#text":"Roku"}}
         """
         url = f"{self.base_url}/query/active-app"
         try:
             response = await self.client.get(url)
             if response.status_code == HTTPStatus.OK:
                 print("Successfully retrieved active app.")
-                return response.text
+                active_app = xmltodict.parse(response.text)["active-app"].get("app")
+                return active_app
             else:
                 print(f"Failed to get active app. Status code: {response.status_code}")
                 return None

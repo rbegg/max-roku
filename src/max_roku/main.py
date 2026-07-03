@@ -106,9 +106,9 @@ async def launch_app(req: LaunchRequest, controller: RokuController = Depends(ge
     return {"message": f"App {req.app_id} launched successfully"}
 
 
-@roku_app.post("/get-active-app")
+@roku_app.get("/get-active-app")
 async def get_active_app(controller: RokuController = Depends(get_controller)):
-    """Launches a specific app using the provider appropriate for its app_id."""
+    """Returns the active app."""
     active_app = await controller.get_active_app()
     if not active_app:
         raise HTTPException(status_code=500, detail="Failed to query active app")

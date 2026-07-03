@@ -1,6 +1,7 @@
 import socket
 import re
 
+
 def discover_roku_ip():
     """
     Search for Roku devices on the local network using SSDP.
@@ -23,20 +24,20 @@ def discover_roku_ip():
         sock.sendto(ssdp_msg, ('239.255.255.250', 1900))
 
         while True:
-            data, addr = sock.recvfrom(1024)
-            response = data.decode('utf-8', errors='ignore')
+            try:
+                data, addr = sock.recvfrom(1024)
+                response = data.decode('utf-8', errors='ignore')
 
-            # Look for the 'location' header in the response
-            # It usually looks like: location: http://192.168.1.15:8060/description.xml
-            match = re.search(r'location: (http://[0-9.]+:[0-9]+)', response, re.IGNORECASE)
-            if match:
-                found_url = match.group(1)
-                # Extract just the IP address from the URL
-                return found_url.split(':')[0]
-    except socket.timeout:
-        return None
-    except Exception as e:
-        print(f"Discovery error: {e}")
-        return None
+                # Improved regex: explicitly looks for the location header,
+                # followed by http://, and captures the IP segment before the colon.
+                match = re.search(r'location: http://([\d\.]+):', response, re.IGNORECASE)
+
+                if match:
+                    return match.group(1)
+            except socket.timeout:
+                print("Discovery timed out; no Roku device responded.")
+                break
     finally:
         sock.close()
+
+    return None

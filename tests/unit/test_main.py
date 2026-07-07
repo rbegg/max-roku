@@ -1,4 +1,5 @@
 import os
+import sys
 import xmltodict
 from unittest.mock import AsyncMock, patch
 

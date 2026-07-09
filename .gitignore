@@ -1,3 +1,6 @@
 .idea
 .python-version
 __pycache__
+.venv
+*.logs
+test_logs

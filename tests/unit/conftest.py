@@ -48,3 +48,33 @@ async def mock_asyncio_sleep():
     """
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         yield mock_sleep
+
+
+@pytest.fixture
+def override_provider():
+    """
+    Fixture factory to quickly swap out get_provider with a configured AsyncMock.
+    Cleans up overrides automatically after the test finishes.
+    """
+    from max_roku.main import roku_app, get_current_provider
+
+    mock_provider = AsyncMock()
+
+    def _override(side_effect=None, return_value=None):
+        if side_effect:
+            mock_provider.launch.side_effect = side_effect
+            mock_provider.restart.side_effect = side_effect
+            mock_provider.post.side_effect = side_effect
+        else:
+            mock_provider.launch.return_value = return_value
+            mock_provider.restart.return_value = return_value
+            mock_provider.post.return_value = return_value
+
+        roku_app.dependency_overrides[get_current_provider] = lambda: mock_provider
+        return mock_provider
+
+    yield _override
+
+    # Teardown block runs automatically when the test finishes
+    if get_current_provider in roku_app.dependency_overrides:
+        del roku_app.dependency_overrides[get_current_provider]

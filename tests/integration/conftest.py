@@ -36,18 +36,29 @@ def pytest_addoption(parser):
         "--hw",
         action="store_true",
         default=False,
-        help="Execute tests against physical Roku hardware and prompt for manual verification."
+        help="Execute tests against physical Roku hardware."
+    )
+    parser.addoption(
+        "--manual",
+        action="store_true",
+        default=False,
+        help="If executing tests against physical Roku hardware, prompt for integration verification."
     )
 
 
 @pytest.fixture
 def is_hw(request):
-    """Fixture to let tests cleanly branch conditional manual validation steps."""
+    """Fixture to let tests cleanly branch conditional integration validation steps."""
     return request.config.getoption("--hw")
+
+@pytest.fixture
+def manual_confirmation(request):
+    """Fixture to let tests cleanly branch conditional integration validation steps."""
+    return request.config.getoption("--manual")
 
 
 @pytest.fixture(autouse=True)
-def mock_roku_network(request, mocker):
+def mock_roku_network(request, mocker, ):
     """
     Autouse interceptor that patches all outgoing httpx calls globally.
     If --hw is targeted, it leaves network transport unmodified.
@@ -56,7 +67,7 @@ def mock_roku_network(request, mocker):
         yield
         return
 
-    def dynamic_mock_send(request_obj):
+    def dynamic_mock_send(request_obj,*_args, **_kwargs):
         url_path = str(request_obj.url.path)
 
         # Utility helper to pop values chronologically if configured as a sequence list
@@ -112,7 +123,7 @@ def client(request):
                 logger.info("\n🧹 Test complete. Returning Roku safely back to Home screen...")
                 try:
                     # Execute your home route cleanup directly on the active client instance
-                    cleanup_response = test_client.post("press/home")
+                    cleanup_response = test_client.post("press/Home")
                     assert cleanup_response.status_code == 200, (
                         f"❌ Mandatory Teardown Failure: Physical Roku rejected the Home command! "
                         f"Status: {cleanup_response.status_code}, Payload: {cleanup_response.text}"

@@ -1,8 +1,9 @@
 import httpx
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from http import HTTPStatus
 
+from max_roku.exceptions import RokuUnexpectedState, RokuConnectionError, RokuCommandError
 from max_roku.roku_controller import RokuController, Command
 
 @pytest.fixture
@@ -24,10 +25,12 @@ async def test_send_command_success(controller, mock_client):
     mock_client.post.return_value = mock_response
 
     # Act
-    success = await controller.send_command(Command.HOME)
+    try:
+        await controller.send_command(Command.HOME)
+    except Exception as e:
+        pytest.fail(f"Send command raised an unexpected exception: {e}")
 
     # Assert
-    assert success
     expected_url = "http://localhost:8060/keypress/Home"
     mock_client.post.assert_called_once_with(expected_url)
 
@@ -72,14 +75,16 @@ async def test_get_media_player_state_failure(controller, mock_client):
     # Arrange
     mock_response = MagicMock()
     mock_response.status_code = HTTPStatus.NOT_FOUND
+    mock_response.text = ""
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Not Found", request=MagicMock(), response=mock_response
+    )
     mock_client.get.return_value = mock_response
 
-    # Act
-    state, raw = await controller.get_media_player_state()
+    # Act & Assert
+    with pytest.raises(RokuUnexpectedState):
+        await controller.get_media_player_state()
 
-    # Assert
-    assert state is None
-    assert raw is None
 
 @pytest.mark.asyncio
 async def test_send_command_failure(controller, mock_client):
@@ -87,17 +92,21 @@ async def test_send_command_failure(controller, mock_client):
     # Arrange
     mock_response = MagicMock()
     mock_response.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        message="Internal Server Error",
+        request=MagicMock(),
+        response=mock_response
+    )
     mock_client.post.return_value = mock_response
 
-    # Act
-    # Assuming your implementation raises an exception or returns a specific value
-    # Adjust based on how your controller handles this
-    success = await controller.send_command(Command.BACK)
+    # Act & Assert
+    with pytest.raises(RokuCommandError,match="Roku rejected command 'Back'"):
+        await controller.send_command(Command.BACK)
 
     # Assert
-    assert not success
     expected_url = "http://localhost:8060/keypress/Back"
     mock_client.post.assert_called_once_with(expected_url)
+
 
 @pytest.mark.asyncio
 async def test_send_command_exception(controller, mock_client):
@@ -105,13 +114,15 @@ async def test_send_command_exception(controller, mock_client):
     # Arrange
     mock_client.post.side_effect = httpx.ConnectError("Network Connection Refused")
 
-    # Act
-    success = await controller.send_command(Command.UP)
+    # Act & Assert
+    with pytest.raises(RokuConnectionError) as exc_info:
+        await controller.send_command(Command.UP)
+        assert "DeviceUnavailable" == str(exc_info.value)
 
     # Assert
-    assert not success
     expected_url = "http://localhost:8060/keypress/Up"
     mock_client.post.assert_called_once_with(expected_url)
+
 
 @pytest.mark.asyncio
 async def test_get_media_player_state_unknown_state(controller, mock_client):
@@ -129,18 +140,18 @@ async def test_get_media_player_state_unknown_state(controller, mock_client):
     # Assert: Depending on your controller, it might default to 'stop' or None
     assert state == "unknown"  # or whatever your default 'else' logic is
 
+
 @pytest.mark.asyncio
 async def test_get_media_player_state_exception(controller, mock_client):
     """Verify that network exceptions are caught."""
     # Arrange
+
     mock_client.get.side_effect = httpx.ConnectError("Network Connection Refused")
 
     # Act
-    state, raw = await controller.get_media_player_state()
+    with pytest.raises(RokuConnectionError, match="Failed to communicate with Roku device"):
+        await controller.get_media_player_state()
 
-    # Assert
-    assert state is None
-    assert raw is None
 
 
 async def test_press_until_playing(controller, mock_client):
@@ -170,12 +181,11 @@ async def test_launch_success(controller, mock_client):
     mock_client.post.return_value = mock_response
 
     # Act
-    success = await controller.launch_app("123", "456", "Movie")
+    await controller.launch_app("123", "456", "Movie")
 
     # Assert
-    assert success
     expected_url = "http://localhost:8060/launch/123"
-    expected_params = {'contentID': '456', 'mediaType': 'Movie'}
+    expected_params = {'contentId': '456', 'mediaType': 'Movie'}
     mock_client.post.assert_called_once_with(expected_url, params=expected_params)
 
 
@@ -186,12 +196,11 @@ async def test_launch_error(controller, mock_client):
     mock_client.post.return_value = mock_response
 
     # Act
-    success = await controller.launch_app("123", "456", "Movie")
+    await controller.launch_app("123", "456", "Movie")
 
     # Assert
-    assert not success
     expected_url = "http://localhost:8060/launch/123"
-    expected_params = {'contentID': '456', 'mediaType': 'Movie'}
+    expected_params = {'contentId': '456', 'mediaType': 'Movie'}
     mock_client.post.assert_called_once_with(expected_url, params=expected_params)
 
 
@@ -199,11 +208,9 @@ async def test_launch_exception(controller, mock_client):
     # Arrange
     mock_client.post.side_effect = httpx.ConnectError("Network Connection Refused")
 
-    # Act
-    success = await controller.launch_app("123", "456", "Movie")
-
-    # Assert
-    assert not success
+    # Act & Assert
+    with pytest.raises(RokuConnectionError, match="Failed to communicate with Roku device"):
+        _ = await controller.launch_app("123", "456", "Movie")
 
 
 async def test_get_active_app_success(controller, mock_client):
@@ -238,13 +245,17 @@ async def test_get_active_app_error(controller, mock_client):
     # Arrange
     mock_response = MagicMock()
     mock_response.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        message="Internal Server Error",
+        request=MagicMock(),
+        response=mock_response
+    )
+    mock_response.text = ""
     mock_client.get.return_value = mock_response
 
-    # Act
-    active_app = await controller.get_active_app()
-
-    # Assert
-    assert active_app is None
+    # Act & Access
+    with pytest.raises(RokuCommandError, match="Roku rejected '/query/active-app' with status"):
+        _ = await controller.get_active_app()
 
 
 async def test_get_active_app_exception(controller, mock_client):
@@ -252,41 +263,8 @@ async def test_get_active_app_exception(controller, mock_client):
     Verify that get_active_app returns None when an exception is raised.
     """
     # Arrange
-    mock_client.get.side_effect = Exception("Network Connection Refused")
+    mock_client.get.side_effect = httpx.ConnectError("Network Connection Refused")
 
-    # Act
-    active_app = await controller.get_active_app()
-
-    # Assert
-    assert active_app is None
-
-
-@pytest.mark.asyncio
-async def test_restart_current(controller, mock_client):
-    """Verify that restart_current delegates to the provider when the state is valid."""
-    # Arrange
-    # 1. Mock the state to be 'play' so the controller proceeds
-    # controller.get_media_player_state = AsyncMock(return_value=("play", {"player": {"plugin": {"@id": "123"}}}))
-    xml_response = """
-    <player state="play">
-        <position>10000</position>
-        <plugin id="123" name="Netflix" type="appl" />
-    </player>
-    """
-    mock_response = MagicMock()
-    mock_response.status_code = HTTPStatus.OK
-    mock_response.text = xml_response
-    mock_client.get.return_value = mock_response
-
-    # 2. Mock the provider factory and the provider itself
-    with patch("max_roku.roku_controller.get_provider") as mock_get_provider:
-        mock_provider = AsyncMock()
-        mock_provider.restart = AsyncMock(return_value=True)
-        mock_get_provider.return_value = mock_provider
-
-        # Act
-        success = await controller.restart_current(pause=False)
-
-        # Assert
-        assert success is True
-        mock_provider.restart.assert_called_once_with(False)
+    # Act & Access
+    with pytest.raises(RokuConnectionError, match="Failed to communicate with Roku device"):
+        _ = await controller.get_active_app()

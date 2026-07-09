@@ -1,29 +1,21 @@
 from http import HTTPStatus
 from typing import Literal, Any, Optional, Tuple, Dict
-from enum import StrEnum
+
+from loguru import logger
 
 import httpx
 import xmltodict
+from xml.parsers.expat import ExpatError
 import asyncio
 
-from max_roku.provider import get_provider
+from max_roku.exceptions import RokuConnectionError, RokuCommandError, RokuUnexpectedState, RokuParsingError
+from max_roku.constants import Command
 
 PAUSE_TIME = 5
 MAX_RETRIES = 12
 
 type PlayerState = Literal["stop", "play", "pause", "unknown"]
 
-class Command(StrEnum):
-    HOME = "Home"
-    BACK = "Back"
-    SELECT = "Select"
-    UP = "Up"
-    DOWN = "Down"
-    LEFT = "Left"
-    RIGHT = "Right"
-    PLAY = "Play"
-    REV = "Rev"
-    FWD = "Fwd"
 
 class RokuController:
     """
@@ -60,25 +52,26 @@ class RokuController:
     def get_state(self) -> PlayerState:
         return self._state
 
-    async def send_command(self, command: Command) -> bool:
+    async def send_command(self, command: Command):
         """
         Internal method to send the POST request to the ECP endpoint.
         """
         url = f"{self.base_url}/keypress/{command}"
         try:
             response = await self.client.post(url)
-            if response.status_code != HTTPStatus.OK:
-                print(f"Failed to send command. Status code: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            return False
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Command rejected: {e.response.status_code}")
+            raise RokuCommandError(f"Roku rejected command '{command}' with status {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            logger.error(f"Network error: {e}")
+            raise RokuConnectionError("Failed to communicate with Roku device") from e
 
-        print(f"Successfully sent command: {command}")
-        return True
+        logger.info(f"Successfully sent command: {command}")
+        return
 
 
-    async def launch_app(self, app_id, content_id=None, content_type=None) -> bool:
+    async def launch_app(self, app_id, content_id=None, content_type=None):
         """
         Launches a specific application on the Roku via deep-link.
         Returns True if the launch HTTP call succeeded (does NOT guarantee playback).
@@ -87,39 +80,46 @@ class RokuController:
 
         params = {}
         if content_id:
-            params['contentID'] = content_id
+            params['contentId'] = content_id
         if content_type:
             params['mediaType'] = content_type
+        logger.info(f"Post Params={params} URL= {url}")
 
         try:
             response = await self.client.post(url, params=params)
-            print(f"POST: {response.url}")
-            if response.status_code == HTTPStatus.OK:
-                print(f"Successfully launched: {app_id} (Deep link: {bool(content_id)})")
-                await asyncio.sleep(PAUSE_TIME * 2)
-                await self.get_media_player_state()
-                return True
-            print(f"Unexpected Response Code = {response.status_code}")
-            return False
-        except Exception as e:
-            print(f"An error occurred while launching {app_id}: {e}")
-            return False
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Command rejected: {e.response.status_code}")
+            raise RokuCommandError(f"Roku rejected launch for app_id = {app_id}, content_id = {content_id}, "
+                                   f"content_type = {content_type} with status {e.response.status_code}"
+                  ) from e
+        except httpx.RequestError as e:
+            logger.error(f"Network error: {e}")
+            raise RokuConnectionError("Failed to communicate with Roku device") from e
 
-    async def restart_current(self, pause: bool) -> bool:
-        """
-        Resets the current playing media to the start, and either pauses or plays.
-        The media player state must = 'pause' or 'play'.
-        """
-        # Ensure player has responded to any previous request
-        await asyncio.sleep(PAUSE_TIME)
-        state, _ = await self.get_media_player_state()
-        print(f"Restart: Initial State ={state} Plugin_app={self.plugin_app['@id']}")
+        logger.info(
+            f"Successfully launched: app_id = {app_id}, content_id = {content_id} content_type = {content_type} ")
+        return
 
-        if state in ['play', 'pause'] and self.plugin_app:
-            provider = get_provider(self.plugin_app["@id"], self)
-            return await provider.restart(pause)
+    # async def restart_current(self, pause: bool):
+    #     """
+    #     Resets the current playing media to the start, and either pauses or plays.
+    #     The media player state must = 'pause' or 'play'.
+    #     """
+    #     # Ensure player has responded to any previous request
+    #     await asyncio.sleep(PAUSE_TIME)
+    #     state, _ = await self.get_media_player_state()
+    #     logger.info(f"Restart: Initial State ={state} Plugin_app={self.plugin_app['@id']}")
+    #
+    #     if state in ['play', 'pause'] and self.plugin_app:
+    #         provider = get_provider(self.plugin_app["@id"], self)
+    #         await provider.restart(pause)
+    #     else:
+    #         raise RokuUnexpectedState(
+    #             f"Restart requested but Rocku Media Player  not in 'play' or 'pause' state: {state}"
+    #         )
+    #     return
 
-        return False
 
     async def press_until_playing(self, max_retries: int = MAX_RETRIES) -> bool:
         """
@@ -134,7 +134,7 @@ class RokuController:
             await self.send_command(Command.SELECT)
             await asyncio.sleep(PAUSE_TIME)
             state, _ = await self.get_media_player_state()
-            print(f"press_until_playing: state={state}")
+            logger.info(f"press_until_playing: state={state}")
         return state == "play"
 
 
@@ -158,16 +158,19 @@ class RokuController:
         url = f"{self.base_url}/query/active-app"
         try:
             response = await self.client.get(url)
-            if response.status_code == HTTPStatus.OK:
-                print("Successfully retrieved active app.")
-                active_app = xmltodict.parse(response.text)["active-app"].get("app")
-                return active_app
-            else:
-                print(f"Failed to get active app. Status code: {response.status_code}")
-                return None
-        except Exception as e:
-            print(f"An error occurred while querying active app: {e}")
-            return None
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise RokuCommandError(f"Roku rejected '/query/active-app' with status {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise RokuConnectionError("Failed to communicate with Roku device") from e
+
+        try:
+            active_app = xmltodict.parse(response.text)["active-app"].get("app")
+        except ExpatError as e:
+            raise RokuParsingError(f"Failed to parse XML response {response.text}") from e
+
+        logger.info(f"Successfully retrieved active app = {active_app}.")
+        return active_app
 
     async def get_media_player_state(self) -> Tuple[Optional[PlayerState], Optional[Dict[str, Any]]]:
         """
@@ -175,30 +178,51 @@ class RokuController:
         Returns response a dictionary containing the XML response.
         """
         url = f"{self.base_url}/query/media-player"
+
+        # 1. Step One: Separate the Network Operation
         try:
             response = await self.client.get(url)
-            if response.status_code == HTTPStatus.OK:
-                print("Successfully retrieved media player state.")
-                self.media_player_state = xmltodict.parse(response.text)
-                position = self.media_player_state["player"].get("position", None)
-                if position:
-                    self.position = int(position.split()[0])
-                self.plugin_app = self.media_player_state["player"].get("plugin", None)
-                state = self.media_player_state["player"].get("@state", "")
-                if state in ("stop", "close", "none"):
-                    self._state = "stop"
-                elif state in ("play", "buffer", "buffering"):
-                    self._state = "play"
-                elif state == "pause":
-                    self._state = "pause"
-                else:
-                    self._state = "unknown"
-                    print(f"Unknown State: {state}")
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == HTTPStatus.NOT_FOUND:
+                raise RokuUnexpectedState(
+                    "Media player query endpoint is not supported in the current device context."
+                ) from e
+            raise RokuCommandError(f"Roku returned a bad status code: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise RokuConnectionError(f"Failed to communicate with Roku device") from e
 
-                return self._state, self.media_player_state
-            else:
-                print(f"Failed to get media player state. Status code: {response.status_code}")
-                return None, None
-        except Exception as e:
-            print(f"An error occurred while querying media player state: {e}")
-            return None, None
+        # 2. Step Two: Separate the XML Parsing
+        try:
+            raw_state = xmltodict.parse(response.text)
+        except ExpatError as e:
+            raise RokuParsingError(f"Malformed XML payload returned from Roku") from e
+
+        # 3. Step Three: Map the data safely using sequential guards
+        try:
+            player_data = raw_state["player"]
+
+            # Guard against blank whitespace or missing positions safely
+            position = player_data.get("position")
+            if position and position.split():
+                self.position = int(position.split()[0])
+
+            self.plugin_app = player_data.get("plugin")
+            state = player_data.get("@state", "unknown")
+
+        except (KeyError, IndexError, ValueError) as e:
+            raise RokuParsingError(f"Roku API schema mismatch or unexpected values") from e
+
+        # 4. Final step: Update State Machine representation
+        if state in ("stop", "close", "none"):
+            self._state = "stop"
+        elif state in ("play", "buffer", "buffering"):
+            self._state = "play"
+        elif state == "pause":
+            self._state = "pause"
+        else:
+            self._state = "unknown"
+            logger.error(f"Unknown State received: {state}")
+
+        logger.info(f"Successfully got state: {self._state}")
+        return self._state, raw_state

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from loguru import logger
 import asyncio
 
 PAUSE_TIME = 5
@@ -54,14 +55,14 @@ class GenericProvider(Provider):
 
     async def pause(self) -> str:
         state, _ = await self.controller.get_media_player_state()
-        print(f"Pause: Initial State = {state}")
+        logger.info(f"Pause: Initial State = {state}")
         if state == "play":
-            print("Pausing")
+            logger.info("Pausing")
             await asyncio.sleep(PAUSE_TIME)
             await self.controller.send_command('Play')
             await asyncio.sleep(PAUSE_TIME)
             state, _ = await self.controller.get_media_player_state()
-        print(f"Pause: Final State = {state}")
+        logger.info(f"Pause: Final State = {state}")
         return state
 
 
@@ -94,19 +95,19 @@ class NetflixProvider(GenericProvider):
         The media player state must = 'pause' or 'play'.
         :param pause: If True, the media will be reset to the start and then paused.
                       If False, the media will replay from the start.
-        :return: True if successful, False if the meda player is in an unexpected state.
+        :return: True if successful, False if the media player is in an unexpected state.
         """
         # Ensure player has responded to any previous request
         # await asyncio.sleep(PAUSE_TIME)
         state, _  = await self.controller.get_media_player_state()
-        print(f"Restart: Pause={pause} Initial State ={state}")
+        logger.info(f"Restart: Pause={pause} Initial State ={state}")
         if state in ['play', 'pause']:
             if not self.controller.position:
-                print(f"Expected position value")
+                logger.error(f"Expected position value")
                 return False
             # if less than 30 seconds of media has played, back will not yield a 'restart from beginning' option
             if self.controller.position < 35000:
-                print(f"Need to fast fwd ")
+                logger.info(f"Need to fast fwd ")
                 await self.controller.send_command('Fwd')
                 await asyncio.sleep(PAUSE_TIME)
                 await self.controller.send_command('Play')
@@ -123,7 +124,7 @@ class NetflixProvider(GenericProvider):
             else:
                 state, _ = await self.controller.get_media_player_state()
 
-            print(f"Restart: Final State = {state}")
+            logger.info(f"Restart: Final State = {state}")
             return True
         return False
 
@@ -139,9 +140,9 @@ class ZinniaProvider(GenericProvider):
 
     async def restart(self, pause: bool = False) -> bool:
         state, _ = await self.controller.get_media_player_state()
-        print(f"Restart: Initial State ={state}")
+        logger.info(f"Restart: Initial State ={state}")
         if not self.controller.position:
-            print(f"Expected position value")
+            logger.error(f"Expected position value")
             return False
         # if less than 5 seconds of media has played, back will not yield a 'restart from beginning' option
         #
@@ -159,7 +160,7 @@ class ZinniaProvider(GenericProvider):
             state = await self.pause()
         else:
             state, _ = await self.controller.get_media_player_state()
-        print(f"Restart: Final State = {state}")
+        logger.info(f"Restart: Final State = {state}")
 
         return True
 

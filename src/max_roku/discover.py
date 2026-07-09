@@ -21,6 +21,7 @@ def discover_roku_ip():
 
     try:
         # Send the multicast search request
+        # noinspection PyTypeChecker
         sock.sendto(ssdp_msg, ('239.255.255.250', 1900))
 
         while True:
@@ -30,7 +31,7 @@ def discover_roku_ip():
 
                 # Improved regex: explicitly looks for the location header,
                 # followed by http://, and captures the IP segment before the colon.
-                match = re.search(r'location: http://([\d\.]+):', response, re.IGNORECASE)
+                match = re.search(r'location: http://([\d.]+):', response, re.IGNORECASE)
 
                 if match:
                     return match.group(1)

@@ -53,7 +53,7 @@ def setup_test_specific_loguru(request):
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item, _call):
+def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
     if not hasattr(item, "rep_status"):

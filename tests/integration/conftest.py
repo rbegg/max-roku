@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 import httpx
 from loguru import logger
 
+
 # Import your actual FastAPI application from your main app script
 from max_roku.main import roku_app
 
@@ -79,7 +80,7 @@ def mock_roku_network(request, mocker, ):
                 return state_data
 
         # 1. Mock the /query/active-app route
-        if "get-active-app" in url_path:
+        if "query/active-app" in url_path:
             mock_xml = get_mock_value('app_state')
             return httpx.Response(status_code=200, text=mock_xml, request=request_obj)
 
@@ -98,8 +99,6 @@ def mock_roku_network(request, mocker, ):
 
     # Inject our dynamic router directly into the underlying httpx network client engine
     mocker.patch.object(httpx.AsyncClient, "send", side_effect=dynamic_mock_send)
-
-    mocker.patch("asyncio.sleep")
 
     try:
         yield  # Run the test case

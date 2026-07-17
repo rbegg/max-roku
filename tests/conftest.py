@@ -2,6 +2,10 @@ import os
 import sys
 import pytest
 from loguru import logger
+import time
+import asyncio
+
+from unittest.mock import AsyncMock, MagicMock
 
 # 1. Remove the default console output globally
 logger.remove()
@@ -59,3 +63,23 @@ def pytest_runtest_makereport(item, call):
     if not hasattr(item, "rep_status"):
         item.rep_status = {}
     item.rep_status[rep.when] = rep
+
+
+def pytest_configure(config):
+    """
+    Executes at the absolute inception of the Pytest run, BEFORE any test
+    or app modules are imported. Swaps out core sleep behaviors globally.
+    """
+    if config.getoption("--hw", default=False):
+        return
+
+    # 1. Force environment parameters to skip the 3-second discovery UDP scan
+    import os
+    if not os.environ.get("ROKU_IP"):
+        os.environ["ROKU_IP"] = "127.0.0.1"
+
+    # 2. Mutate the foundation modules to instantly return mock containers.
+    # Every module loaded after this point will pull the mock instead of the real delay!
+    asyncio.sleep = AsyncMock()
+
+    print("\n⚡ Mock Mode Active: Fast-forwarding all test and app delays instantly!")

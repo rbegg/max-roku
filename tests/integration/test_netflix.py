@@ -3,13 +3,8 @@ from loguru import logger
 
 from conftest import MOCK_ROKU_STATE
 
-
-
-def confirmation(msg: str):
-    print("\n\n--- 📺 MANUAL CONFIRMATION REQUIRED ---")
-
-    user_input = input(f"\nPlease confirm: {msg} (y/n): ").strip().lower()
-    return user_input == 'y'
+PAUSE_TIME = 5
+MAX_WAIT_TIME = 30
 
 
 def test_launch_netflix_and_verify_playing(client, is_hw, manual_confirmation):
@@ -17,6 +12,47 @@ def test_launch_netflix_and_verify_playing(client, is_hw, manual_confirmation):
     Validates that a movie deep link can be triggered on Netflix andy
     proves the application correctly handles state monitoring parsing.
     """
+
+    def hw_sleep(s: int):
+        """ Helper function to sleep for a given number of seconds if in hardware mode. """
+        if is_hw:
+            sleep(s)
+
+
+    def get_state() -> str:
+        response = client.get("/get-state")
+
+        assert response.status_code == 200
+        data = response.json()
+        s = data[0]
+        return s
+
+    def wait_until(target_state: str, max_sleep: int) -> bool:
+        """ helper function to sleep for up to max seconds waiting for a given state """
+
+        for i in range(max_sleep):
+            s = get_state()
+            if s == target_state:
+                return True
+            hw_sleep(1)
+
+        return get_state() == target_state
+
+
+    def confirmation(msg: str, s: int):
+        if not is_hw:
+            return True
+
+        if manual_confirmation:
+            print("\n\n--- 📺 MANUAL CONFIRMATION REQUIRED ---")
+            user_input = input(f"\nPlease confirm: {msg} (y/n): ").strip().lower()
+            return user_input == 'y'
+
+        # without manual confirmation, a sleep is required to allow the player time to complete action
+        sleep(s)
+        return True
+
+
     # --- Arrange: If we're in Mock Mode, program our network timeline sequence ---
     if not is_hw:
         # Scenario Timeline:
@@ -33,64 +69,39 @@ def test_launch_netflix_and_verify_playing(client, is_hw, manual_confirmation):
         "content_type": "series"
     }
 
-    # 1. Launch
+    # 1. Launch & verify play
     launch_response = client.post("launch", json=launch_payload)
     if launch_response.status_code == 422:
         logger.error("\nVALIDATION ERROR DETAILS:", launch_response.json())
     assert launch_response.status_code == 200
     assert "Launch successful:" in launch_response.json()["message"]
 
-    sleep(5)
+    assert confirmation("Did the show launch?", PAUSE_TIME) is True
+    assert wait_until("play", MAX_WAIT_TIME)
 
-    # 2. Verify state = play
-    state_response = client.get("/get-state")
+    active_app_response = client.get("/get-active-app")
+    if active_app_response.status_code == 422:
+        logger.error("\nVALIDATION ERROR DETAILS:", active_app_response.json())
+    assert active_app_response.status_code == 200
+    active_app = active_app_response.json()
+    assert active_app["@id"] == "12"
+    assert active_app["#text"] == "Netflix"
 
-    assert state_response.status_code == 200
-    response_data = state_response.json()
-    state = response_data[0]
-    assert state == "play"
-    assert "Netflix" in str(state_response.json())
-
-    if is_hw and manual_confirmation:
-        assert confirmation("Did the show launch?") is True
-    else:
-        sleep(5)
-
-    # 3. Pause
+    # 2. Pause
     pause_response = client.post("press/Play",)
     assert pause_response.status_code == 200
     assert pause_response.json() == {"message": "Command Play sent successfully"}
-    sleep(5)
 
-    state_response = client.get("/get-state")
+    assert confirmation("Did the show pause?", PAUSE_TIME) is True
+    assert wait_until("pause", MAX_WAIT_TIME)
 
-    assert state_response.status_code == 200
-    response_data = state_response.json()
-    state = response_data[0]
-    assert state == "pause"
-
-    if is_hw and manual_confirmation:
-        assert confirmation("Did the show pause?") is True
-    else:
-        sleep(5)
-
-    # 4. Play
+    # 3. Play
     play_response = client.post("press/Play", )
     assert play_response.status_code == 200
     assert play_response.json() == {"message": "Command Play sent successfully"}
-    sleep(5)
+    assert confirmation("Did the show play?", PAUSE_TIME) is True
+    assert wait_until("play", MAX_WAIT_TIME)
 
-    state_response = client.get("/get-state")
-
-    assert state_response.status_code == 200
-    response_data = state_response.json()
-    state = response_data[0]
-    assert state == "play"
-
-    if is_hw and manual_confirmation:
-        assert confirmation("Did the show play?") is True
-    else:
-        sleep(5)
 
     #5. Restart
 
@@ -98,6 +109,6 @@ def test_launch_netflix_and_verify_playing(client, is_hw, manual_confirmation):
     assert restart_response.status_code == 200
     assert restart_response.json() == {"message": "Restart command sent"}
 
-    if is_hw and manual_confirmation:
-        assert confirmation("Did the show restart?")
+    assert confirmation("Did the show restart?", PAUSE_TIME) is True
+    assert wait_until("play", MAX_WAIT_TIME)
 

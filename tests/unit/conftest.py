@@ -1,6 +1,6 @@
 import os
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 from max_roku.main import roku_app, get_controller
 
@@ -36,18 +36,11 @@ def mock_controller():
     mock.launch_app = AsyncMock(return_value=True)
     mock.press_until_playing = AsyncMock(return_value=True)
     mock.get_media_player_state = AsyncMock(return_value=("play", {"player": {"@state": "play"}}))
+    mock.get_active_app = (
+        AsyncMock(return_value={"@id":"12", "@type": "appl", "@version": "4.1.218", "#text":"Netflix"})
+    )
     mock._state = "play"
     return mock
-
-# Mock all uses of asyncio.sleep
-@pytest.fixture(autouse=True)
-async def mock_asyncio_sleep():
-    """
-    Automatically mocks asyncio.sleep for all tests,
-    making them run instantly.
-    """
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        yield mock_sleep
 
 
 @pytest.fixture

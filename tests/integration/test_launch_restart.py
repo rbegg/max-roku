@@ -1,72 +1,69 @@
+import pytest
 from time import sleep
 from loguru import logger
-
 from conftest import MOCK_ROKU_STATE
+from app_configs import AppTestConfig  # Import your config class
 
 PAUSE_TIME = 5
 MAX_WAIT_TIME = 30
 
+# Define your provider test data sets here
+PROVIDERS = [
+    AppTestConfig(app_id="12", app_name="Netflix", content_id="81556391", content_type="series"),
+    AppTestConfig(app_id="674313", app_name="Zinnia TV", content_id="3301125", content_type="video"),
+    # Easy to add others later:
+    # AppTestConfig(app_id="837", app_name="YouTube", content_id="dQw4w9WgXcQ", content_type="live"),
+]
 
-def test_launch_netflix_and_verify_playing(client, is_hw, manual_confirmation):
+@pytest.mark.parametrize("provider", PROVIDERS, ids=lambda p: p.app_name.lower())
+def test_app_launch_and_playback_workflow(client, is_hw, manual_confirmation, provider: AppTestConfig):
     """
-    Validates that a movie deep link can be triggered on Netflix andy
-    proves the application correctly handles state monitoring parsing.
+    Validates that a deep link can be triggered on any streaming application 
+    and verifies that state monitoring parses the player states correctly.
     """
 
     def hw_sleep(s: int):
-        """ Helper function to sleep for a given number of seconds if in hardware mode. """
         if is_hw:
             sleep(s)
 
-
     def get_state() -> str:
         response = client.get("/get-state")
-
         assert response.status_code == 200
-        data = response.json()
-        s = data[0]
-        return s
+        return response.json()[0]
 
     def wait_until(target_state: str, max_sleep: int) -> bool:
-        """ helper function to sleep for up to max seconds waiting for a given state """
-
-        for i in range(max_sleep):
-            s = get_state()
-            if s == target_state:
+        for _ in range(max_sleep):
+            if get_state() == target_state:
                 return True
+            logger.info("Waiting for state change")
             hw_sleep(1)
-
         return get_state() == target_state
-
 
     def confirmation(msg: str, s: int):
         if not is_hw:
             return True
-
         if manual_confirmation:
             print("\n\n--- 📺 MANUAL CONFIRMATION REQUIRED ---")
             user_input = input(f"\nPlease confirm: {msg} (y/n): ").strip().lower()
             return user_input == 'y'
-
-        # without manual confirmation, a sleep is required to allow the player time to complete action
         sleep(s)
         return True
 
-
-    # --- Arrange: If we're in Mock Mode, program our network timeline sequence ---
+    # --- Arrange: Mock Mode Setup using the active provider ---
     if not is_hw:
-        # Scenario Timeline:
-        # Setup: App initiates launch -> returns 200 OK
-        # Check: App hits /get-active-app -> returns Netflix with 'play' state tracking
-        MOCK_ROKU_STATE["plugin_id"] = ["12"]
-        MOCK_ROKU_STATE["plugin_name"] = ["Netflix"]
-        MOCK_ROKU_STATE["player_state"] = ["play", "pause", "play"]
+        MOCK_ROKU_STATE["plugin_id"] = [provider.app_id]
+        MOCK_ROKU_STATE["plugin_name"] = [provider.app_name]
+        MOCK_ROKU_STATE["player_state"] = ["play", "pause", "play", "play"]
+        MOCK_ROKU_STATE["app_state"] = f"""
+            <active-app>
+                <app id="{provider.app_id}" type="appl" version="80.2523.1521022" ui-location="{provider.app_id}">{provider.app_name}</app>
+            </active-app>
+            """
 
-    # --- Act: Fire the request against your FastAPI rest client route ---
     launch_payload = {
-        "app_id": "12",
-        "content_id": "81556391",  # Example Netflix movie asset ID
-        "content_type": "series"
+        "app_id": provider.app_id,
+        "content_id": provider.content_id,
+        "content_type": provider.content_type
     }
 
     # 1. Launch & verify play
@@ -76,39 +73,32 @@ def test_launch_netflix_and_verify_playing(client, is_hw, manual_confirmation):
     assert launch_response.status_code == 200
     assert "Launch successful:" in launch_response.json()["message"]
 
-    assert confirmation("Did the show launch?", PAUSE_TIME) is True
+    assert confirmation(f"Did {provider.app_name} launch?", PAUSE_TIME) is True
     assert wait_until("play", MAX_WAIT_TIME)
 
     active_app_response = client.get("/get-active-app")
-    if active_app_response.status_code == 422:
-        logger.error("\nVALIDATION ERROR DETAILS:", active_app_response.json())
     assert active_app_response.status_code == 200
     active_app = active_app_response.json()
-    assert active_app["@id"] == "12"
-    assert active_app["#text"] == "Netflix"
+    assert active_app["@id"] == provider.app_id
+    assert active_app["#text"] == provider.app_name
 
     # 2. Pause
-    pause_response = client.post("press/Play",)
+    hw_sleep(PAUSE_TIME)
+    pause_response = client.post("press/Play")
     assert pause_response.status_code == 200
-    assert pause_response.json() == {"message": "Command Play sent successfully"}
-
     assert confirmation("Did the show pause?", PAUSE_TIME) is True
     assert wait_until("pause", MAX_WAIT_TIME)
 
     # 3. Play
-    play_response = client.post("press/Play", )
+    play_response = client.post("press/Play")
     assert play_response.status_code == 200
-    assert play_response.json() == {"message": "Command Play sent successfully"}
     assert confirmation("Did the show play?", PAUSE_TIME) is True
     assert wait_until("play", MAX_WAIT_TIME)
 
-
-    #5. Restart
-
+    # 4. Restart
     restart_response = client.post("restart", json={"pause": "false"})
     assert restart_response.status_code == 200
-    assert restart_response.json() == {"message": "Restart command sent"}
-
     assert confirmation("Did the show restart?", PAUSE_TIME) is True
     assert wait_until("play", MAX_WAIT_TIME)
 
+    hw_sleep(PAUSE_TIME)

@@ -59,53 +59,66 @@ def manual_confirmation(request):
 
 
 @pytest.fixture(autouse=True)
-def mock_roku_network(request, mocker, ):
+def mock_roku_network(request):
     """
-    Autouse interceptor that patches all outgoing httpx calls globally.
-    If --hw is targeted, it leaves network transport unmodified.
+    Globally intercepts all outbound network calls via httpx to simulate
+    hardware state timelines deterministically across all parameterized runs.
     """
-    if request.config.getoption("--hw"):
+    is_hw = bool(request.config.getoption("--hw", default=False))
+    if is_hw:
         yield
         return
 
-    def dynamic_mock_send(request_obj,*_args, **_kwargs):
-        url_path = str(request_obj.url.path)
+    # 1. Non-blocking AsyncMock loops: Optimize execution times instantly
+    mocker = request.getfixturevalue("mocker")
+    mocker.patch("asyncio.sleep")
 
-        # Utility helper to pop values chronologically if configured as a sequence list
-        def get_mock_value(key) -> str:
-            state_data = MOCK_ROKU_STATE[key]
-            if isinstance(state_data, list):
-                return state_data.pop(0) if len(state_data) > 1 else state_data[0]
+    # 2. Chronological timeline parser tracking state progression
+    def get_mock_value(key) -> str:
+        state_data = MOCK_ROKU_STATE[key]
+        if isinstance(state_data, list):
+            if len(state_data) == 1:
+                state_data = state_data[0]
+            elif len(state_data) > 1:
+                state_data = state_data.pop(0)
             else:
-                return state_data
+                raise ValueError(f"Invalid state data for key: {key}")
+            return state_data
+        return state_data
 
-        # 1. Mock the /query/active-app route
+    # 3. Request interceptor routing logic mimicking Roku hardware ECP
+    def dynamic_mock_send(request_obj: httpx.Request, *args, **kwargs) -> httpx.Response:
+        url_path = str(request_obj.url)
+
+        # Handle active app querying path
         if "query/active-app" in url_path:
-            mock_xml = get_mock_value('app_state')
-            return httpx.Response(status_code=200, text=mock_xml, request=request_obj)
+            app_id = get_mock_value("plugin_id")
+            app_name = get_mock_value("plugin_name")
+            dynamic_xml = f"""<active-app>
+                <app id="{app_id}" type="appl" version="1.0.0" ui-location="{app_id}">{app_name}</app>
+            </active-app>"""
+            return httpx.Response(status_code=200, text=dynamic_xml, request=request_obj)
 
-        # 2. Mock the /query/media-player route
-        elif "query/media-player" in url_path:
-            mock_xml = f"""
-            <player state="{get_mock_value('player_state')}" error="false">
-                <plugin id="{get_mock_value('plugin_id')}" name="{get_mock_value('plugin_name')}" />
-                <format audio="aac_adts" video="av1" captions="none" drm="none" />
-                <position>143549 ms</position>
+        # Handle media player state querying loops
+        if "query/media-player" in url_path:
+            player_state = get_mock_value("player_state")
+            position = get_mock_value("player_position_ms")
+            app_id = get_mock_value("plugin_id")
+            player_xml = f"""<player error="false" state="{player_state}">
+                <plugin id="{app_id}" version="1.0.0" />
+                <position>{position}</position>
             </player>"""
-            return httpx.Response(status_code=200, text=mock_xml, request=request_obj)
+            return httpx.Response(status_code=200, text=player_xml, request=request_obj)
 
-        # 3. Default catch-all for keypress, launch, and macro installations
-        return httpx.Response(status_code=200, text="", request=request_obj)
+        # Catch-all success loop for all actions (POST /launch, POST /keypress commands)
+        return httpx.Response(status_code=200, text="<success/>", request=request_obj)
 
-    # Inject our dynamic router directly into the underlying httpx network client engine
+    # 4. Global Interception Link
+    # This forces ANY AsyncClient created anywhere in your backend logic to bypass real sockets
     mocker.patch.object(httpx.AsyncClient, "send", side_effect=dynamic_mock_send)
 
-    try:
-        yield  # Run the test case
-    finally:
-        # Strict Teardown cycle: Cleanly scrub and reset modifications to isolate all cases
-        global MOCK_ROKU_STATE
-        MOCK_ROKU_STATE = {k: list(v) for k, v in DEFAULT_ROKU_STATE.items()}
+
+    yield  # Let the parameterized tests run seamlessly
 
 
 @pytest.fixture
